@@ -236,6 +236,29 @@
     overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
   }
 
+  /* Two-mic calibration meter */
+  .calib-bars {
+    display: flex; gap: 22px; justify-content: center; align-items: flex-end;
+    height: 120px; margin: 22px 0 20px;
+  }
+  .calib-bar {
+    width: 48px; height: 100%; border-radius: 12px;
+    background: rgba(0,0,0,0.08); position: relative; overflow: visible;
+    border: 1px solid var(--hud-stroke);
+    transition: outline-color 0.15s; outline: 2px solid transparent;
+  }
+  .calib-bar > span {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 0%;
+    border-radius: 11px;
+    background: linear-gradient(to top, var(--good), var(--accent));
+    transition: height 60ms linear;
+  }
+  .calib-bar.active { outline-color: var(--accent); }
+  .calib-bar .cap {
+    position: absolute; bottom: -22px; left: 0; right: 0; text-align: center;
+    font-size: 11px; letter-spacing: 0.06em; color: var(--ink-soft);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .target { animation: none; }
   }
@@ -338,6 +361,7 @@
       <button class="icon-btn" id="btnMotion" aria-pressed="false" aria-label="Toggle reduced motion" title="Reduced motion">〰</button>
       <button class="icon-btn" id="btnSound" aria-pressed="true" aria-label="Toggle paper sound" title="Sound">🔊</button>
       <button class="icon-btn" id="btnCalibrate" aria-label="Recalibrate airflow direction by dragging" title="Calibrate direction">🧭</button>
+      <button class="icon-btn" id="btnTwoMic" aria-pressed="false" aria-label="Set up two-microphone (top vs bottom) sensing" title="Two-mic setup">📱</button>
     </div>
 
     <!-- Start overlay -->
@@ -352,6 +376,23 @@
           We'll ask for microphone access — audio never leaves your device.<br/>
           No mic? You can still play with the arrow keys, or drag to set the wind direction.
         </p>
+      </div>
+    </div>
+
+    <!-- Two-mic (top vs bottom) calibration overlay -->
+    <div class="overlay hidden" id="calibOverlay">
+      <div class="card">
+        <h1 id="calibTitle" style="font-size:28px">Two-mic setup</h1>
+        <p class="sub" id="calibBody">Your phone has a mic at the top and one at the bottom. We'll learn them so the ball reacts to the end you blow.</p>
+        <div class="calib-bars">
+          <div class="calib-bar" id="barA"><span></span><div class="cap">Mic 1</div></div>
+          <div class="calib-bar" id="barB"><span></span><div class="cap">Mic 2</div></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="calibBegin">Begin</button>
+          <button class="btn secondary" id="calibSkip">Skip</button>
+        </div>
+        <p class="mini-hint" id="calibHint">Hold the phone upright in portrait.</p>
       </div>
     </div>
 
@@ -406,6 +447,18 @@
   const btnMotion = document.getElementById("btnMotion");
   const btnSound = document.getElementById("btnSound");
   const btnCalibrate = document.getElementById("btnCalibrate");
+  const btnTwoMic = document.getElementById("btnTwoMic");
+
+  const calibOverlay = document.getElementById("calibOverlay");
+  const calibTitle = document.getElementById("calibTitle");
+  const calibBody = document.getElementById("calibBody");
+  const calibHint = document.getElementById("calibHint");
+  const calibBegin = document.getElementById("calibBegin");
+  const calibSkip = document.getElementById("calibSkip");
+  const barA = document.getElementById("barA");
+  const barB = document.getElementById("barB");
+  const barAFill = barA.querySelector("span");
+  const barBFill = barB.querySelector("span");
 
   // ---- World / display state ----
   let W = 0, H = 0, DPR = 1;
@@ -559,6 +612,133 @@
   }
 
   /* --------------------------------------------------------------------------
+     Two-mic (top vs bottom) sensing + calibration
+     --------------------------------------------------------------------------
+     We cannot know in advance which audio channel (L=0 / R=1) corresponds to
+     the phone's top mic vs bottom mic — it is device-specific. So we ask the
+     user to blow the top edge, then the bottom edge, and learn the mapping.
+     If both blows land on the same channel (or there is no second channel),
+     the device only exposes one effective mic to the browser and we say so.
+     -------------------------------------------------------------------------- */
+  let twoMic = false, chTop = -1, chBottom = -1;
+  const calib = { active: false, phase: "idle", frames: 0, accum: 0, energy: 0, silence: 0, topRatio: 0 };
+
+  // Summed magnitude per channel (skip lowest bins / rumble).
+  function chanEnergy() {
+    analyserL.getByteFrequencyData(freqBufL);
+    let l = 0; for (let i = 4; i < freqBufL.length; i++) l += freqBufL[i];
+    let r = 0;
+    if (analyserR) {
+      analyserR.getByteFrequencyData(freqBufR);
+      for (let i = 4; i < freqBufR.length; i++) r += freqBufR[i];
+    }
+    return { l, r };
+  }
+
+  function setBars(l, r) {
+    const scale = Math.max(l, r, 40);
+    barAFill.style.height = Math.min(100, (l / scale) * 100) + "%";
+    barBFill.style.height = Math.min(100, (r / scale) * 100) + "%";
+    barA.classList.toggle("active", l >= r && (l + r) > 30);
+    barB.classList.toggle("active", r > l && (l + r) > 30);
+  }
+
+  function calibSay(title, body, hint) {
+    if (title != null) calibTitle.textContent = title;
+    if (body != null) calibBody.textContent = body;
+    if (hint != null) calibHint.textContent = hint;
+  }
+  function resetCalibAccum() { calib.frames = 0; calib.accum = 0; calib.energy = 0; calib.silence = 0; }
+
+  function startTwoMicCalibration() {
+    if (!micActive) { announce("Turn on the microphone first — tap Start."); return; }
+    calibOverlay.classList.remove("hidden");
+    if (!analyserR) {
+      // Single-channel device: be honest, no two-mic sensing possible.
+      twoMic = false;
+      btnTwoMic.setAttribute("aria-pressed", "false");
+      calib.phase = "mono"; calib.active = false;
+      calibBegin.textContent = "OK";
+      calibSay("One microphone only",
+        "This phone/browser hands web pages a single combined microphone — it doesn't expose the top and bottom mics separately (typical on iPhone Safari). Blow detection still works; direction uses tilt, stereo balance, or 🧭 drag-calibration.",
+        "");
+      return;
+    }
+    calib.phase = "intro"; calib.active = false;
+    calibBegin.textContent = "Begin";
+    calibSay("Two-mic setup",
+      "Your phone has a mic at the top and one at the bottom. We'll learn them so the ball reacts to the end you blow.",
+      "Hold the phone upright. Tap Begin, then blow the TOP edge.");
+  }
+
+  function calibTick() {
+    if (!calib.active) return;
+    analyserL.getByteTimeDomainData(timeBuf);
+    const vol = rms(timeBuf);
+    const { l, r } = chanEnergy();
+    setBars(l, r);
+
+    if (calib.phase === "top" || calib.phase === "bottom") {
+      if (vol > 0.05) {
+        calib.frames++; calib.accum += (r - l); calib.energy += (l + r); calib.silence = 0;
+        if (calib.frames >= 16) { finalizeStep(); return; }
+      } else if (vol < 0.02 && calib.frames >= 6) {
+        calib.silence++;
+        if (calib.silence > 25) { finalizeStep(); return; }
+      }
+    } else if (calib.phase === "gap") {
+      // wait for quiet before the second blow
+      if (vol < 0.025) { calib.silence++; if (calib.silence > 20) beginBottom(); }
+      else calib.silence = 0;
+    }
+    requestAnimationFrame(calibTick);
+  }
+
+  function beginBottom() {
+    calib.phase = "bottom"; resetCalibAccum();
+    calibSay("Blow the BOTTOM now",
+      "Give a steady blow onto the bottom edge (charging-port end).", "Listening…");
+  }
+
+  function finalizeStep() {
+    const ratio = calib.energy > 0 ? Math.abs(calib.accum) / calib.energy : 0;
+    const dominant = calib.accum >= 0 ? 1 : 0;   // 1 = R channel, 0 = L channel
+
+    if (calib.phase === "top") {
+      chTop = dominant; calib.topRatio = ratio;
+      calib.phase = "gap"; resetCalibAccum();
+      calibSay("Got the top ✓ — now the BOTTOM",
+        "When the bars settle, blow onto the bottom edge (charging-port end).", "Get ready…");
+      requestAnimationFrame(calibTick);
+      return;
+    }
+
+    // phase === "bottom" → evaluate the mapping
+    chBottom = dominant;
+    calib.active = false;
+    const distinct = (chTop !== chBottom) && ratio > 0.015 && calib.topRatio > 0.015;
+
+    if (distinct) {
+      twoMic = true;
+      btnTwoMic.setAttribute("aria-pressed", "true");
+      btnTwoMic.title = "Two-mic sensing: on";
+      calib.phase = "done"; calibBegin.textContent = "Play";
+      calibSay("Two-mic sensing on ✓",
+        "Blow the top edge and the ball drops; blow the bottom and it flies up. Harder breath sends it further.",
+        "");
+      announce("Two-microphone sensing calibrated.");
+    } else {
+      twoMic = false;
+      btnTwoMic.setAttribute("aria-pressed", "false");
+      calib.phase = "fail"; calibBegin.textContent = "OK";
+      calibSay("Couldn't separate the two mics",
+        "Both blows registered on the same channel, so this device gives the browser only one effective microphone (typical on iPhone Safari). Blow detection still works — set direction with tilt or 🧭 drag-calibrate.",
+        "");
+      announce("Two-microphone sensing unavailable; using single-mic mode.");
+    }
+  }
+
+  /* --------------------------------------------------------------------------
      Per-frame breath analysis → updates `air`
      -------------------------------------------------------------------------- */
   function analyzeBreath() {
@@ -586,11 +766,28 @@
     }
     BREATH.raw = strength;
 
-    // Direction: base = "up/away", nudged horizontally by stereo balance,
-    // plus device-orientation bias, unless the user calibrated manually.
+    // Direction. Priority:
+    //  1. manual drag-calibrated override
+    //  2. two-mic (top vs bottom) sensing, once calibrated
+    //  3. stereo L/R balance + tilt fallback (default "up/away")
     let dx, dy;
     if (calibratedDir) {
       dx = calibratedDir.dx; dy = calibratedDir.dy;
+    } else if (twoMic && analyserR) {
+      // The blown mic captures far more turbulence energy than the far one,
+      // so compare the two physical mics and push the ball AWAY from the
+      // blown end. chTop/chBottom map a channel index (0=L,1=R) to a phone end.
+      let l = 0; for (let i = 4; i < freqBufL.length; i++) l += freqBufL[i];
+      analyserR.getByteFrequencyData(freqBufR);
+      let r = 0; for (let i = 4; i < freqBufR.length; i++) r += freqBufR[i];
+      const topE = (chTop === 0) ? l : r;
+      const botE = (chBottom === 0) ? l : r;
+      const tot = topE + botE || 1;
+      const d = (botE - topE) / tot;         // +ve → bottom mic louder (blown)
+      const conf = Math.min(1, Math.abs(d) / 0.12);
+      // bottom blown → push up; top blown → push down. Weak signal → gentle up.
+      dy = conf < 0.3 ? -0.35 : (d >= 0 ? -1 : 1) * conf;
+      dx = orientBias.dx * 0.6;
     } else {
       const bal = stereoBalance();           // -1..1
       dx = bal * 0.9 + orientBias.dx;
@@ -1034,6 +1231,28 @@
     if (!calibrateMode) calArrow.style.opacity = "0";
   });
 
+  // ---- Two-mic calibration buttons ----
+  btnTwoMic.addEventListener("click", startTwoMicCalibration);
+
+  calibBegin.addEventListener("click", () => {
+    if (calib.phase === "intro") {
+      // Start listening for the TOP blow.
+      calib.phase = "top"; calib.active = true; resetCalibAccum();
+      calibSay("Blow the TOP now",
+        "Give a steady blow onto the top edge (earpiece / notch).", "Listening…");
+      requestAnimationFrame(calibTick);
+    } else {
+      // mono / done / fail → just close.
+      calib.active = false;
+      calibOverlay.classList.add("hidden");
+    }
+  });
+
+  calibSkip.addEventListener("click", () => {
+    calib.active = false;
+    calibOverlay.classList.add("hidden");
+  });
+
   /* --------------------------------------------------------------------------
      Boot sequence
      -------------------------------------------------------------------------- */
@@ -1051,9 +1270,13 @@
       if (ok) {
         enableOrientation();
         msgOverlay.classList.add("hidden");
-        instruction.textContent = stereo
-          ? "💨 Blow toward your screen to push the ball"
-          : "💨 Blow into your mic to push the ball";
+        if (stereo && analyserR) {
+          // Two real channels available → run top/bottom mic calibration now.
+          instruction.textContent = "💨 Blow the top or bottom of your phone";
+          startTwoMicCalibration();
+        } else {
+          instruction.textContent = "💨 Blow into your mic to push the ball";
+        }
       } else {
         // Graceful degradation: offer no-mic play.
         startOverlay.classList.add("hidden");
