@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="default">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#cfd6dd" />
+<title>BlowBall — Blow the Paper Ball</title>
+<style>
+  /* ============================================================
+     BlowBall — single-file build
+     HTML5 + CSS3 + vanilla JS. No frameworks.
+     ============================================================ */
+
+  :root {
+    --bg-1: #e9edf1;
+    --bg-2: #cfd6dd;
+    --ink: #2b2f36;
+    --ink-soft: #6b7280;
+    --accent: #3b82f6;
+    --good: #22c55e;
+    --paper-hi: #ffffff;
+    --paper-mid: #e8e4da;
+    --paper-lo: #b7b0a2;
+    --shadow: rgba(40, 44, 52, 0.28);
+    --hud-bg: rgba(255, 255, 255, 0.55);
+    --hud-stroke: rgba(0, 0, 0, 0.08);
+    --motion: 1; /* multiplied into animation durations; 0 when reduced */
+  }
+
+  /* High-contrast theme */
+  html[data-theme="contrast"] {
+    --bg-1: #000000;
+    --bg-2: #000000;
+    --ink: #ffffff;
+    --ink-soft: #d0d0d0;
+    --accent: #ffd400;
+    --good: #00ff7f;
+    --paper-hi: #ffffff;
+    --paper-mid: #cfcfcf;
+    --paper-lo: #6f6f6f;
+    --shadow: rgba(0, 0, 0, 0.9);
+    --hud-bg: rgba(0, 0, 0, 0.7);
+    --hud-stroke: rgba(255, 255, 255, 0.4);
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(120% 90% at 50% 0%, var(--bg-1) 0%, var(--bg-2) 100%);
+  }
+
+  #stage {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* Particle / wind canvas sits behind the ball */
+  #fx {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+  }
+
+  /* ---------- Paper ball ---------- */
+  #ball {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 72px;
+    height: 72px;
+    will-change: transform;
+    transform: translate3d(0, 0, 0);
+    pointer-events: none;
+    filter: drop-shadow(0 10px 14px var(--shadow));
+    z-index: 5;
+  }
+  #ball svg { display: block; width: 100%; height: 100%; }
+
+  /* ---------- Targets ---------- */
+  .target {
+    position: absolute;
+    width: 64px;
+    height: 64px;
+    margin: -32px 0 0 -32px;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 3;
+    display: grid;
+    place-items: center;
+    border: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+    background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
+    animation: targetPulse calc(1.8s * var(--motion) + 0.001s) ease-in-out infinite;
+  }
+  .target::after {
+    content: "";
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 80%, transparent);
+  }
+  @keyframes targetPulse {
+    0%, 100% { transform: scale(1); opacity: 0.85; }
+    50% { transform: scale(1.12); opacity: 1; }
+  }
+  .target.reduced { animation: none; }
+
+  /* ---------- HUD ---------- */
+  #hud {
+    position: absolute;
+    top: max(14px, env(safe-area-inset-top));
+    left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 max(16px, env(safe-area-inset-left)) 0 max(16px, env(safe-area-inset-right));
+    z-index: 8;
+    pointer-events: none;
+  }
+  .panel {
+    background: var(--hud-bg);
+    border: 1px solid var(--hud-stroke);
+    border-radius: 16px;
+    padding: 8px 12px;
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.07);
+  }
+  .label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 5px; }
+  .score-val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+
+  /* Breath gauge (vertical) */
+  #gaugeWrap { display: flex; align-items: center; gap: 10px; }
+  #breathGauge {
+    width: 10px; height: 64px; border-radius: 6px;
+    background: rgba(0,0,0,0.08);
+    overflow: hidden; position: relative;
+    border: 1px solid var(--hud-stroke);
+  }
+  #breathFill {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 0%;
+    background: linear-gradient(to top, var(--good), var(--accent));
+    transition: height 60ms linear;
+  }
+
+  /* Wind meter (direction dial) */
+  #windDial { width: 56px; height: 56px; }
+
+  /* ---------- Overlays ---------- */
+  .overlay {
+    position: absolute; inset: 0; z-index: 20;
+    display: grid; place-items: center;
+    text-align: center; padding: 24px;
+    background: radial-gradient(120% 90% at 50% 10%, rgba(255,255,255,0.5), rgba(207,214,221,0.85));
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  html[data-theme="contrast"] .overlay { background: rgba(0,0,0,0.85); }
+  .overlay.hidden { display: none; }
+  .card { max-width: 420px; }
+  h1 { font-size: clamp(30px, 8vw, 46px); margin: 0 0 10px; font-weight: 800; letter-spacing: -0.02em; }
+  .sub { font-size: clamp(15px, 4vw, 18px); color: var(--ink-soft); margin: 0 0 28px; line-height: 1.5; }
+  .btn {
+    pointer-events: auto;
+    font: inherit; font-size: 17px; font-weight: 600;
+    color: #fff; background: var(--accent);
+    border: none; border-radius: 14px;
+    padding: 15px 34px; cursor: pointer;
+    box-shadow: 0 10px 26px color-mix(in srgb, var(--accent) 45%, transparent);
+    transition: transform 0.18s cubic-bezier(0.16,1,0.3,1), box-shadow 0.18s;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn.secondary {
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--hud-stroke); box-shadow: none;
+    padding: 12px 22px; font-size: 15px;
+  }
+  .btn-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+  .mini-hint { margin-top: 20px; font-size: 12.5px; color: var(--ink-soft); line-height: 1.6; }
+
+  /* Floating instruction toast */
+  #instruction {
+    position: absolute; left: 50%; bottom: max(28px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 9; pointer-events: none;
+    font-size: 14px; color: var(--ink);
+    background: var(--hud-bg);
+    border: 1px solid var(--hud-stroke);
+    border-radius: 999px; padding: 10px 18px;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    transition: opacity 0.6s ease, transform 0.6s cubic-bezier(0.16,1,0.3,1);
+  }
+  #instruction.gone { opacity: 0; transform: translate(-50%, 14px); }
+
+  /* Settings buttons (bottom-left) */
+  #tools {
+    position: absolute; left: max(14px, env(safe-area-inset-left));
+    bottom: max(16px, env(safe-area-inset-bottom));
+    z-index: 9; display: flex; gap: 8px;
+  }
+  .icon-btn {
+    pointer-events: auto;
+    width: 42px; height: 42px; border-radius: 12px;
+    border: 1px solid var(--hud-stroke);
+    background: var(--hud-bg);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    color: var(--ink); font-size: 18px; cursor: pointer;
+    display: grid; place-items: center;
+    transition: transform 0.15s;
+  }
+  .icon-btn:active { transform: scale(0.92); }
+  .icon-btn[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: transparent; }
+
+  /* Calibration hint when dragging */
+  #calArrow {
+    position: absolute; z-index: 7; pointer-events: none;
+    opacity: 0; transition: opacity 0.2s;
+  }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .target { animation: none; }
+  }
+</style>
+</head>
+<body>
+  <div id="stage" aria-label="Paper ball play area">
+    <!-- Particle / wind streak layer -->
+    <canvas id="fx" aria-hidden="true"></canvas>
+
+    <!-- Direction arrow shown during touch calibration -->
+    <svg id="calArrow" width="120" height="120" viewBox="0 0 120 120" aria-hidden="true">
+      <defs>
+        <marker id="ah" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+      <line x1="60" y1="60" x2="60" y2="14" stroke="var(--accent)" stroke-width="5"
+            stroke-linecap="round" marker-end="url(#ah)"/>
+    </svg>
+
+    <!-- The realistic paper ball (SVG, crumpled via turbulence + shading) -->
+    <div id="ball" role="img" aria-label="Paper ball. Move it with the arrow keys or your breath.">
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <!-- Crumple displacement -->
+          <filter id="crumple" x="-20%" y="-20%" width="140%" height="140%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.045 0.05" numOctaves="3" seed="7" result="noise"/>
+            <feDiffuseLighting in="noise" surfaceScale="2.4" diffuseConstant="1.05"
+                               lighting-color="#fffaf0" result="light">
+              <feDistantLight azimuth="235" elevation="58"/>
+            </feDiffuseLighting>
+            <feComposite in="light" in2="SourceGraphic" operator="arithmetic"
+                         k1="1.05" k2="0" k3="0" k4="-0.18" result="lit"/>
+            <feComposite in="lit" in2="SourceGraphic" operator="in"/>
+          </filter>
+          <radialGradient id="paperShade" cx="38%" cy="34%" r="72%">
+            <stop offset="0%"  stop-color="var(--paper-hi)"/>
+            <stop offset="55%" stop-color="var(--paper-mid)"/>
+            <stop offset="100%" stop-color="var(--paper-lo)"/>
+          </radialGradient>
+          <radialGradient id="rim" cx="50%" cy="50%" r="50%">
+            <stop offset="78%" stop-color="rgba(0,0,0,0)"/>
+            <stop offset="100%" stop-color="rgba(60,55,45,0.32)"/>
+          </radialGradient>
+        </defs>
+
+        <!-- base sphere of paper -->
+        <circle cx="50" cy="50" r="46" fill="url(#paperShade)"/>
+        <!-- crumple facets: a few semi-random polygons shaded by the lighting filter -->
+        <g filter="url(#crumple)" opacity="0.9">
+          <circle cx="50" cy="50" r="46" fill="var(--paper-mid)"/>
+        </g>
+        <!-- hand-drawn crease lines for tangible folds -->
+        <g stroke="rgba(90,84,70,0.30)" stroke-width="0.8" fill="none" stroke-linecap="round">
+          <path d="M22 40 L44 52 L38 72"/>
+          <path d="M58 22 L52 46 L74 54"/>
+          <path d="M30 62 L52 58 L66 74"/>
+          <path d="M68 34 L56 50 L70 60"/>
+          <path d="M40 24 L48 44"/>
+        </g>
+        <g stroke="rgba(255,255,255,0.5)" stroke-width="0.7" fill="none" stroke-linecap="round">
+          <path d="M23 41 L45 53"/>
+          <path d="M59 23 L53 47"/>
+          <path d="M31 63 L53 59"/>
+        </g>
+        <!-- contact shadow rim -->
+        <circle cx="50" cy="50" r="46" fill="url(#rim)"/>
+      </svg>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud">
+      <div class="panel" role="status" aria-live="polite">
+        <div class="label">Score</div>
+        <div class="score-val" id="scoreVal">0</div>
+      </div>
+
+      <div class="panel" id="gaugeWrap">
+        <svg id="windDial" viewBox="0 0 56 56" aria-label="Wind direction meter">
+          <circle cx="28" cy="28" r="25" fill="none" stroke="var(--hud-stroke)" stroke-width="2"/>
+          <g id="windNeedle" transform="rotate(0 28 28)">
+            <line x1="28" y1="28" x2="28" y2="9" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+          </g>
+          <circle cx="28" cy="28" r="3" fill="var(--ink-soft)"/>
+        </svg>
+        <div>
+          <div class="label">Breath</div>
+          <div id="breathGauge"><div id="breathFill"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Floating instruction -->
+    <div id="instruction">💨 Blow toward your screen to push the ball</div>
+
+    <!-- Bottom-left tool buttons -->
+    <div id="tools">
+      <button class="icon-btn" id="btnContrast" aria-pressed="false" aria-label="Toggle high contrast" title="High contrast">◐</button>
+      <button class="icon-btn" id="btnMotion" aria-pressed="false" aria-label="Toggle reduced motion" title="Reduced motion">〰</button>
+      <button class="icon-btn" id="btnSound" aria-pressed="true" aria-label="Toggle paper sound" title="Sound">🔊</button>
+      <button class="icon-btn" id="btnCalibrate" aria-label="Recalibrate airflow direction by dragging" title="Calibrate direction">🧭</button>
+    </div>
+
+    <!-- Start overlay -->
+    <div class="overlay" id="startOverlay">
+      <div class="card">
+        <h1>Blow the Paper Ball</h1>
+        <p class="sub">Use your breath to move the ball. The harder you blow, the further it flies.</p>
+        <div class="btn-row">
+          <button class="btn" id="startBtn">Start</button>
+        </div>
+        <p class="mini-hint">
+          We'll ask for microphone access — audio never leaves your device.<br/>
+          No mic? You can still play with the arrow keys, or drag to set the wind direction.
+        </p>
+      </div>
+    </div>
+
+    <!-- Status / error overlay (reused for permission failures) -->
+    <div class="overlay hidden" id="msgOverlay">
+      <div class="card">
+        <h1 id="msgTitle" style="font-size:28px">Microphone unavailable</h1>
+        <p class="sub" id="msgBody">No problem — play with the arrow keys (or WASD), or drag across the screen to set a wind direction and tap to puff.</p>
+        <div class="btn-row">
+          <button class="btn" id="msgPlay">Play without mic</button>
+          <button class="btn secondary" id="msgRetry">Try mic again</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="sr-only" id="live" aria-live="assertive"></p>
+  </div>
+
+<script>
+/* ============================================================================
+   BlowBall
+   - Web Audio API microphone analysis (RMS volume + spectral flatness)
+   - Stereo amplitude difference → horizontal airflow estimate
+   - Device orientation + drag calibration fallbacks
+   - requestAnimationFrame physics loop (velocity/accel/friction/bounce/spin)
+   - Canvas particle wind, SVG paper ball, targets + score + confetti
+   ============================================================================ */
+(() => {
+  "use strict";
+
+  // ---- DOM refs ----
+  const stage = document.getElementById("stage");
+  const fx = document.getElementById("fx");
+  const ctx = fx.getContext("2d");
+  const ballEl = document.getElementById("ball");
+  const scoreVal = document.getElementById("scoreVal");
+  const breathFill = document.getElementById("breathFill");
+  const windNeedle = document.getElementById("windNeedle");
+  const instruction = document.getElementById("instruction");
+  const calArrow = document.getElementById("calArrow");
+  const live = document.getElementById("live");
+
+  const startOverlay = document.getElementById("startOverlay");
+  const startBtn = document.getElementById("startBtn");
+  const msgOverlay = document.getElementById("msgOverlay");
+  const msgTitle = document.getElementById("msgTitle");
+  const msgBody = document.getElementById("msgBody");
+  const msgPlay = document.getElementById("msgPlay");
+  const msgRetry = document.getElementById("msgRetry");
+
+  const btnContrast = document.getElementById("btnContrast");
+  const btnMotion = document.getElementById("btnMotion");
+  const btnSound = document.getElementById("btnSound");
+  const btnCalibrate = document.getElementById("btnCalibrate");
+
+  // ---- World / display state ----
+  let W = 0, H = 0, DPR = 1;
+  const BALL_SIZE = 72;
+  const RADIUS = BALL_SIZE / 2;
+
+  function resize() {
+    W = stage.clientWidth;
+    H = stage.clientHeight;
+    DPR = Math.min(window.devicePixelRatio || 1, 2); // cap DPR for battery
+    fx.width = Math.round(W * DPR);
+    fx.height = Math.round(H * DPR);
+    fx.style.width = W + "px";
+    fx.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ---- Physics state ----
+  const ball = {
+    x: W / 2, y: H / 2,
+    vx: 0, vy: 0,
+    rot: 0, vrot: 0,
+    mass: 1.0,
+  };
+  const PHYS = {
+    friction: 0.94,       // velocity retention per frame (air drag on light paper)
+    restitution: 0.62,    // bounciness at walls
+    spinDamp: 0.96,
+    maxSpeed: 46,         // px per frame clamp
+    sensitivity: 1.0,     // user/breath force multiplier
+    idleAmp: 6,           // gentle idle float amplitude (px)
+  };
+
+  // ---- Airflow estimate ----
+  // dir is a unit-ish vector pointing the way air FLOWS; the ball is pushed
+  // along this vector (away from the user). magnitude carries breath strength.
+  const air = { dx: 0, dy: -1, strength: 0 };
+  let calibratedDir = null;     // {dx,dy} override from drag, or null
+  let orientBias = { dx: 0, dy: 0 };
+
+  // ---- Audio ----
+  let audioCtx = null, analyserL = null, analyserR = null, stereo = false;
+  let micStream = null;
+  let timeBuf = null, freqBufL = null, freqBufR = null;
+  let micActive = false;
+
+  const BREATH = {
+    volThreshold: 0.045,     // RMS gate
+    flatnessThreshold: 0.18, // spectral flatness gate (noise-like vs tonal)
+    smoothVol: 0,            // smoothed normalized volume 0..1
+    smoothFlat: 0,
+    raw: 0,
+  };
+
+  /* --------------------------------------------------------------------------
+     Microphone setup
+     -------------------------------------------------------------------------- */
+  async function initMic() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!navigator.mediaDevices || !AC) throw new Error("unsupported");
+
+      // Disable processing that would suppress the broadband "breath" signal.
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 2,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+        video: false,
+      });
+
+      audioCtx = new AC();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+
+      const src = audioCtx.createMediaStreamSource(micStream);
+      const track = micStream.getAudioTracks()[0];
+      const settings = track.getSettings ? track.getSettings() : {};
+      stereo = (settings.channelCount || 1) >= 2;
+
+      analyserL = audioCtx.createAnalyser();
+      analyserL.fftSize = 1024;
+      analyserL.smoothingTimeConstant = 0.6;
+
+      if (stereo) {
+        const splitter = audioCtx.createChannelSplitter(2);
+        src.connect(splitter);
+        analyserR = audioCtx.createAnalyser();
+        analyserR.fftSize = 1024;
+        analyserR.smoothingTimeConstant = 0.6;
+        splitter.connect(analyserL, 0);
+        splitter.connect(analyserR, 1);
+      } else {
+        src.connect(analyserL);
+      }
+
+      const bins = analyserL.frequencyBinCount;
+      timeBuf = new Uint8Array(analyserL.fftSize);
+      freqBufL = new Uint8Array(bins);
+      freqBufR = new Uint8Array(bins);
+
+      micActive = true;
+      return true;
+    } catch (err) {
+      micActive = false;
+      return false;
+    }
+  }
+
+  // RMS volume from time-domain (0..~1)
+  function rms(buf) {
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / buf.length);
+  }
+
+  // Spectral flatness = geometric mean / arithmetic mean of the magnitude
+  // spectrum. Near 1 → noise-like (breath); near 0 → tonal (voice, whistle).
+  function spectralFlatness(freq) {
+    let logSum = 0, arith = 0, n = 0;
+    // Skip the lowest bins (DC / rumble) and the very top.
+    for (let i = 3; i < freq.length - 2; i++) {
+      const m = freq[i] / 255 + 1e-6;
+      logSum += Math.log(m);
+      arith += m;
+      n++;
+    }
+    const geo = Math.exp(logSum / n);
+    return geo / (arith / n);
+  }
+
+  // Estimate horizontal direction from L/R amplitude difference.
+  // Phones place mics at opposite ends; the louder channel is closer to the
+  // airflow, so we push the ball away from that side.
+  function stereoBalance() {
+    if (!stereo || !analyserR) return 0;
+    analyserL.getByteFrequencyData(freqBufL);
+    analyserR.getByteFrequencyData(freqBufR);
+    let l = 0, r = 0;
+    for (let i = 4; i < freqBufL.length; i++) { l += freqBufL[i]; r += freqBufR[i]; }
+    const total = l + r;
+    if (total < 1) return 0;
+    // -1 (all left) .. +1 (all right)
+    return (r - l) / total;
+  }
+
+  /* --------------------------------------------------------------------------
+     Per-frame breath analysis → updates `air`
+     -------------------------------------------------------------------------- */
+  function analyzeBreath() {
+    if (!micActive) return;
+
+    analyserL.getByteTimeDomainData(timeBuf);
+    const vol = rms(timeBuf);
+    analyserL.getByteFrequencyData(freqBufL);
+    const flat = spectralFlatness(freqBufL);
+
+    // Smooth for stability.
+    BREATH.smoothVol += (vol - BREATH.smoothVol) * 0.4;
+    BREATH.smoothFlat += (flat - BREATH.smoothFlat) * 0.3;
+
+    const isBreath =
+      BREATH.smoothVol > BREATH.volThreshold &&
+      BREATH.smoothFlat > BREATH.flatnessThreshold;
+
+    // normalized strength 0..1 above the gate
+    let strength = 0;
+    if (isBreath) {
+      strength = Math.min(1, (BREATH.smoothVol - BREATH.volThreshold) / 0.22);
+      // emphasize stronger blows (nonlinear feel)
+      strength = Math.pow(strength, 0.85);
+    }
+    BREATH.raw = strength;
+
+    // Direction: base = "up/away", nudged horizontally by stereo balance,
+    // plus device-orientation bias, unless the user calibrated manually.
+    let dx, dy;
+    if (calibratedDir) {
+      dx = calibratedDir.dx; dy = calibratedDir.dy;
+    } else {
+      const bal = stereoBalance();           // -1..1
+      dx = bal * 0.9 + orientBias.dx;
+      dy = -1 + orientBias.dy;               // default away from user (up screen)
+    }
+    const len = Math.hypot(dx, dy) || 1;
+    air.dx = dx / len;
+    air.dy = dy / len;
+    air.strength = strength;
+  }
+
+  /* --------------------------------------------------------------------------
+     Device orientation (tilt → slight directional bias)
+     -------------------------------------------------------------------------- */
+  function enableOrientation() {
+    function handler(e) {
+      // gamma: left/right tilt (-90..90), beta: front/back (-180..180)
+      if (e.gamma == null) return;
+      orientBias.dx = Math.max(-0.5, Math.min(0.5, e.gamma / 90));
+      orientBias.dy = Math.max(-0.4, Math.min(0.2, (e.beta - 45) / 180));
+    }
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      // iOS 13+ requires a user gesture; we request inside the Start handler.
+      DeviceOrientationEvent.requestPermission()
+        .then(s => { if (s === "granted") window.addEventListener("deviceorientation", handler); })
+        .catch(() => {});
+    } else {
+      window.addEventListener("deviceorientation", handler);
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     Particles (wind streaks + paper fibers)
+     -------------------------------------------------------------------------- */
+  const particles = [];
+  const MAX_PARTICLES = 90;
+
+  function spawnParticles(strength) {
+    // Spawn from the upwind edge so streaks flow toward/over the ball.
+    const count = Math.round(strength * 6);
+    for (let i = 0; i < count && particles.length < MAX_PARTICLES; i++) {
+      // origin: opposite side of the airflow vector, near the ball line
+      const spread = 120;
+      const ox = ball.x - air.dx * 160 + (Math.random() - 0.5) * spread - air.dy * (Math.random()-0.5)*spread;
+      const oy = ball.y - air.dy * 160 + (Math.random() - 0.5) * spread + air.dx * (Math.random()-0.5)*spread;
+      const speed = 4 + strength * 10 + Math.random() * 3;
+      particles.push({
+        x: ox, y: oy,
+        vx: air.dx * speed, vy: air.dy * speed,
+        life: 1, decay: 0.012 + Math.random() * 0.02,
+        size: 0.8 + Math.random() * 2.2,
+        fiber: Math.random() < 0.25,
+      });
+    }
+  }
+
+  function updateParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.97; p.vy *= 0.97;
+      if (p.fiber) { p.vy += 0.05; } // fibers drift down slightly
+      p.life -= p.decay;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+  }
+
+  function drawParticles() {
+    ctx.clearRect(0, 0, W, H);
+    if (reducedMotion) return; // keep canvas clear in reduced-motion mode
+    for (const p of particles) {
+      const a = Math.max(0, p.life);
+      if (p.fiber) {
+        ctx.globalAlpha = a * 0.8;
+        ctx.fillStyle = "#cfc6b2";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // wind streak: short line along velocity
+        ctx.globalAlpha = a * 0.5;
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = p.size;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - p.vx * 2.2, p.y - p.vy * 2.2);
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* --------------------------------------------------------------------------
+     Confetti (on target hit)
+     -------------------------------------------------------------------------- */
+  const confetti = [];
+  function burstConfetti(x, y) {
+    if (reducedMotion) return;
+    const colors = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"];
+    for (let i = 0; i < 36; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 3 + Math.random() * 7;
+      confetti.push({
+        x, y,
+        vx: Math.cos(ang) * sp,
+        vy: Math.sin(ang) * sp - 3,
+        life: 1, decay: 0.012 + Math.random() * 0.01,
+        size: 4 + Math.random() * 5,
+        rot: Math.random() * Math.PI, vrot: (Math.random() - 0.5) * 0.4,
+        color: colors[i % colors.length],
+      });
+    }
+  }
+  function updateDrawConfetti() {
+    for (let i = confetti.length - 1; i >= 0; i--) {
+      const c = confetti[i];
+      c.x += c.vx; c.y += c.vy;
+      c.vy += 0.22; c.vx *= 0.99;
+      c.rot += c.vrot; c.life -= c.decay;
+      if (c.life <= 0) { confetti.splice(i, 1); continue; }
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, c.life);
+      ctx.translate(c.x, c.y);
+      ctx.rotate(c.rot);
+      ctx.fillStyle = c.color;
+      ctx.fillRect(-c.size / 2, -c.size / 2, c.size, c.size * 0.6);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* --------------------------------------------------------------------------
+     Targets + scoring
+     -------------------------------------------------------------------------- */
+  let score = 0;
+  let target = null; // {el, x, y}
+
+  function placeTarget() {
+    if (target) target.el.remove();
+    const pad = 70;
+    let x, y, tries = 0;
+    do {
+      x = pad + Math.random() * (W - pad * 2);
+      y = pad + 90 + Math.random() * (H - pad * 2 - 120);
+      tries++;
+    } while (Math.hypot(x - ball.x, y - ball.y) < 160 && tries < 30);
+
+    const el = document.createElement("div");
+    el.className = "target" + (reducedMotion ? " reduced" : "");
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    stage.appendChild(el);
+    target = { el, x, y };
+  }
+
+  function checkTarget() {
+    if (!target) return;
+    if (Math.hypot(ball.x - target.x, ball.y - target.y) < 44) {
+      score++;
+      scoreVal.textContent = score;
+      announce("Target hit! Score " + score);
+      burstConfetti(target.x, target.y);
+      playRustle(0.5);
+      placeTarget();
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     Tiny paper-rustle sound (synthesized noise burst)
+     -------------------------------------------------------------------------- */
+  let soundOn = true;
+  let lastRustle = 0;
+  function playRustle(gainScale) {
+    if (!soundOn || !audioCtx) return;
+    const now = audioCtx.currentTime;
+    if (now - lastRustle < 0.08) return;
+    lastRustle = now;
+    const dur = 0.18;
+    const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * dur, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const env = 1 - i / data.length;
+      data[i] = (Math.random() * 2 - 1) * env * env;
+    }
+    const node = audioCtx.createBufferSource();
+    node.buffer = buf;
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 3200; bp.Q.value = 0.7;
+    const g = audioCtx.createGain();
+    g.gain.value = 0.12 * (gainScale || 1);
+    node.connect(bp).connect(g).connect(audioCtx.destination);
+    node.start();
+  }
+
+  /* --------------------------------------------------------------------------
+     Main physics + render loop (rAF, frame-rate normalized)
+     -------------------------------------------------------------------------- */
+  let started = false;
+  let reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let lastT = performance.now();
+  let idleClock = 0;
+
+  // Keyboard control state
+  const keys = { left: false, right: false, up: false, down: false };
+
+  function loop(now) {
+    const dt = Math.min(2.5, (now - lastT) / 16.667); // normalize to 60fps steps
+    lastT = now;
+
+    analyzeBreath();
+
+    // ----- Forces -----
+    let fx_ = 0, fy_ = 0;
+
+    // Breath force: F = normalize(volume) * sensitivity, along airflow dir.
+    if (air.strength > 0.001) {
+      const force = air.strength * PHYS.sensitivity * 3.2;
+      fx_ += air.dx * force;
+      fy_ += air.dy * force;
+      ball.vrot += (air.dx) * air.strength * 0.6; // blow imparts spin
+      spawnParticles(air.strength);
+      if (air.strength > 0.25) playRustle(air.strength);
+      hideInstruction();
+    }
+
+    // Keyboard force (accessibility / no-mic play)
+    const kForce = 1.4;
+    if (keys.left)  fx_ -= kForce;
+    if (keys.right) fx_ += kForce;
+    if (keys.up)    fy_ -= kForce;
+    if (keys.down)  fy_ += kForce;
+    if (keys.left || keys.right || keys.up || keys.down) hideInstruction();
+
+    // Integrate (a = F / m)
+    ball.vx += (fx_ / ball.mass) * dt;
+    ball.vy += (fy_ / ball.mass) * dt;
+
+    // Idle float when essentially at rest and not being acted on
+    const movingForce = Math.abs(fx_) + Math.abs(fy_);
+    const speed = Math.hypot(ball.vx, ball.vy);
+    if (!reducedMotion && movingForce < 0.01 && speed < 0.25) {
+      idleClock += dt * 0.03;
+      ball.vx += Math.cos(idleClock * 1.7) * 0.05;
+      ball.vy += Math.sin(idleClock) * 0.05;
+    }
+
+    // Friction + clamp
+    ball.vx *= Math.pow(PHYS.friction, dt);
+    ball.vy *= Math.pow(PHYS.friction, dt);
+    const sp = Math.hypot(ball.vx, ball.vy);
+    if (sp > PHYS.maxSpeed) {
+      ball.vx = ball.vx / sp * PHYS.maxSpeed;
+      ball.vy = ball.vy / sp * PHYS.maxSpeed;
+    }
+
+    // Position
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    // Wall bounce
+    const minX = RADIUS, maxX = W - RADIUS, minY = RADIUS, maxY = H - RADIUS;
+    if (ball.x < minX) { ball.x = minX; ball.vx = -ball.vx * PHYS.restitution; ball.vrot += 0.3; bounceFx(); }
+    else if (ball.x > maxX) { ball.x = maxX; ball.vx = -ball.vx * PHYS.restitution; ball.vrot -= 0.3; bounceFx(); }
+    if (ball.y < minY) { ball.y = minY; ball.vy = -ball.vy * PHYS.restitution; bounceFx(); }
+    else if (ball.y > maxY) { ball.y = maxY; ball.vy = -ball.vy * PHYS.restitution; bounceFx(); }
+
+    // Rotation: roll with horizontal motion + imparted spin
+    ball.vrot += ball.vx * 0.004;
+    ball.vrot *= Math.pow(PHYS.spinDamp, dt);
+    ball.rot += ball.vrot * dt;
+
+    // ----- Render -----
+    const motionBlur = reducedMotion ? 0 : Math.min(2.4, sp * 0.08);
+    ballEl.style.transform =
+      `translate3d(${ball.x - RADIUS}px, ${ball.y - RADIUS}px, 0) rotate(${ball.rot}deg)`;
+    ballEl.style.filter =
+      `drop-shadow(0 ${8 + sp * 0.2}px ${12 + sp * 0.4}px var(--shadow))` +
+      (motionBlur > 0.4 ? ` blur(${motionBlur}px)` : "");
+
+    updateParticles();
+    drawParticles();
+    updateDrawConfetti();
+
+    // HUD: breath gauge + wind needle
+    breathFill.style.height = Math.round(air.strength * 100) + "%";
+    if (air.strength > 0.02 || calibratedDir) {
+      const angle = Math.atan2(air.dy, air.dx) * 180 / Math.PI + 90;
+      windNeedle.setAttribute("transform", `rotate(${angle} 28 28)`);
+    }
+
+    checkTarget();
+
+    requestAnimationFrame(loop);
+  }
+
+  let lastBounce = 0;
+  function bounceFx() {
+    const now = performance.now();
+    if (now - lastBounce > 90) { playRustle(0.4); lastBounce = now; }
+  }
+
+  /* --------------------------------------------------------------------------
+     Instruction toast
+     -------------------------------------------------------------------------- */
+  let instructionGone = false;
+  function hideInstruction() {
+    if (instructionGone) return;
+    instructionGone = true;
+    instruction.classList.add("gone");
+    setTimeout(() => instruction.remove(), 700);
+  }
+
+  function announce(msg) { live.textContent = msg; }
+
+  /* --------------------------------------------------------------------------
+     Touch / drag calibration  (set airflow direction by dragging)
+     -------------------------------------------------------------------------- */
+  let dragStart = null;
+  let calibrateMode = false;
+
+  function pointerDown(e) {
+    if (!started) return;
+    const p = pointFromEvent(e);
+    dragStart = p;
+    if (calibrateMode) {
+      calArrow.style.opacity = "1";
+      calArrow.style.left = (p.x - 60) + "px";
+      calArrow.style.top = (p.y - 60) + "px";
+    }
+  }
+  function pointerMove(e) {
+    if (!dragStart) return;
+    const p = pointFromEvent(e);
+    const dx = p.x - dragStart.x, dy = p.y - dragStart.y;
+    const len = Math.hypot(dx, dy);
+    if (calibrateMode && len > 6) {
+      const ang = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+      calArrow.style.transform = `rotate(${ang}deg)`;
+    }
+  }
+  function pointerUp(e) {
+    if (!dragStart) return;
+    const p = pointFromEvent(e);
+    const dx = p.x - dragStart.x, dy = p.y - dragStart.y;
+    const len = Math.hypot(dx, dy);
+
+    if (calibrateMode && len > 16) {
+      calibratedDir = { dx: dx / len, dy: dy / len };
+      announce("Airflow direction calibrated.");
+      calibrateMode = false;
+      btnCalibrate.setAttribute("aria-pressed", "false");
+      calArrow.style.opacity = "0";
+    } else if (!calibrateMode) {
+      // Quick swipe = a puff in the swipe direction (works without a mic).
+      if (len > 14) {
+        const f = Math.min(1, len / 240);
+        ball.vx += (dx / len) * f * 22;
+        ball.vy += (dy / len) * f * 22;
+        spawnDirPuff(dx / len, dy / len, f);
+        playRustle(f);
+      } else {
+        // tap = small puff upward
+        ball.vy -= 6;
+        playRustle(0.3);
+      }
+      hideInstruction();
+    }
+    dragStart = null;
+  }
+
+  function spawnDirPuff(dx, dy, strength) {
+    const saveDx = air.dx, saveDy = air.dy;
+    air.dx = dx; air.dy = dy;
+    spawnParticles(0.6 + strength);
+    air.dx = saveDx; air.dy = saveDy;
+  }
+
+  function pointFromEvent(e) {
+    const t = e.touches ? e.touches[0] : (e.changedTouches ? e.changedTouches[0] : e);
+    const r = stage.getBoundingClientRect();
+    return { x: (t.clientX - r.left), y: (t.clientY - r.top) };
+  }
+
+  stage.addEventListener("pointerdown", pointerDown);
+  stage.addEventListener("pointermove", pointerMove);
+  stage.addEventListener("pointerup", pointerUp);
+  stage.addEventListener("pointercancel", () => { dragStart = null; });
+
+  /* --------------------------------------------------------------------------
+     Keyboard controls (accessibility)
+     -------------------------------------------------------------------------- */
+  function keyHandler(down) {
+    return (e) => {
+      let used = true;
+      switch (e.key) {
+        case "ArrowLeft": case "a": case "A": keys.left = down; break;
+        case "ArrowRight": case "d": case "D": keys.right = down; break;
+        case "ArrowUp": case "w": case "W": keys.up = down; break;
+        case "ArrowDown": case "s": case "S": keys.down = down; break;
+        case " ": if (down) { ball.vy -= 10; playRustle(0.5); } break;
+        default: used = false;
+      }
+      if (used) { e.preventDefault(); if (down && !started) begin(false); }
+    };
+  }
+  window.addEventListener("keydown", keyHandler(true));
+  window.addEventListener("keyup", keyHandler(false));
+
+  /* --------------------------------------------------------------------------
+     Tool buttons
+     -------------------------------------------------------------------------- */
+  btnContrast.addEventListener("click", () => {
+    const on = document.documentElement.getAttribute("data-theme") !== "contrast";
+    document.documentElement.setAttribute("data-theme", on ? "contrast" : "default");
+    btnContrast.setAttribute("aria-pressed", String(on));
+  });
+
+  btnMotion.addEventListener("click", () => {
+    reducedMotion = !reducedMotion;
+    btnMotion.setAttribute("aria-pressed", String(reducedMotion));
+    document.documentElement.style.setProperty("--motion", reducedMotion ? "0" : "1");
+    if (target) target.el.classList.toggle("reduced", reducedMotion);
+    if (reducedMotion) { particles.length = 0; ctx.clearRect(0, 0, W, H); }
+    announce(reducedMotion ? "Reduced motion on." : "Reduced motion off.");
+  });
+
+  btnSound.addEventListener("click", () => {
+    soundOn = !soundOn;
+    btnSound.setAttribute("aria-pressed", String(soundOn));
+    btnSound.textContent = soundOn ? "🔊" : "🔇";
+  });
+
+  btnCalibrate.addEventListener("click", () => {
+    calibrateMode = !calibrateMode;
+    btnCalibrate.setAttribute("aria-pressed", String(calibrateMode));
+    announce(calibrateMode
+      ? "Calibration: drag across the screen in the direction you want the ball pushed."
+      : "Calibration cancelled.");
+    if (!calibrateMode) calArrow.style.opacity = "0";
+  });
+
+  /* --------------------------------------------------------------------------
+     Boot sequence
+     -------------------------------------------------------------------------- */
+  async function begin(wantMic) {
+    if (!started) {
+      started = true;
+      ball.x = W / 2; ball.y = H / 2;
+      placeTarget();
+      requestAnimationFrame((t) => { lastT = t; loop(t); });
+    }
+    startOverlay.classList.add("hidden");
+
+    if (wantMic) {
+      const ok = await initMic();
+      if (ok) {
+        enableOrientation();
+        msgOverlay.classList.add("hidden");
+        instruction.textContent = stereo
+          ? "💨 Blow toward your screen to push the ball"
+          : "💨 Blow into your mic to push the ball";
+      } else {
+        // Graceful degradation: offer no-mic play.
+        startOverlay.classList.add("hidden");
+        msgOverlay.classList.remove("hidden");
+      }
+    }
+  }
+
+  startBtn.addEventListener("click", () => begin(true));
+  msgPlay.addEventListener("click", () => {
+    msgOverlay.classList.add("hidden");
+    instruction.textContent = "↔ Swipe to puff, or use arrow keys / drag-calibrate";
+  });
+  msgRetry.addEventListener("click", () => begin(true));
+
+  // Respect system reduced-motion at load.
+  window.matchMedia("(prefers-reduced-motion: reduce)")
+    .addEventListener("change", (e) => {
+      reducedMotion = e.matches;
+      btnMotion.setAttribute("aria-pressed", String(reducedMotion));
+      document.documentElement.style.setProperty("--motion", reducedMotion ? "0" : "1");
+    });
+  if (reducedMotion) {
+    btnMotion.setAttribute("aria-pressed", "true");
+    document.documentElement.style.setProperty("--motion", "0");
+  }
+})();
+</script>
+</body>
+</html>
